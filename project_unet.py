@@ -354,11 +354,11 @@ class LambdaLR:
 
 ## 超参数配置
 parser = argparse.ArgumentParser()
-parser.add_argument("--epoch", type=int, default=0, help="epoch to start training from")  # 开始轮
-parser.add_argument("--n_epochs", type=int, default=30, help="number of epochs of training")  # 总轮数
-parser.add_argument("--dataset_name", type=str, default="facades",
+parser.add_argument("--epoch", type=int, default=25, help="epoch to start training from")  # 开始轮
+parser.add_argument("--n_epochs", type=int, default=29, help="number of epochs of training")  # 总轮数
+parser.add_argument("--dataset_name", type=str, default="vangogh",
                     help="name of the dataset")  ## ../input/facades-dataset
-parser.add_argument("--batch_size", type=int, default=1, help="size of the batches")
+parser.add_argument("--batch_size", type=int, default=2, help="size of the batches")
 parser.add_argument("--lr", type=float, default=0.0003, help="adam: learning rate")
 parser.add_argument("--b1", type=float, default=0.5, help="adam: decay of first order momentum of gradient")
 parser.add_argument("--b2", type=float, default=0.999, help="adam: decay of first order momentum of gradient")
@@ -367,7 +367,7 @@ parser.add_argument("--img_height", type=int, default=256, help="size of image h
 parser.add_argument("--img_width", type=int, default=256, help="size of image width")
 parser.add_argument("--channels", type=int, default=3, help="number of image channels")
 parser.add_argument("--sample_interval", type=int, default=100, help="interval between saving generator outputs")
-parser.add_argument("--checkpoint_interval", type=int, default=2, help="interval between saving model checkpoints")
+parser.add_argument("--checkpoint_interval", type=int, default=1, help="interval between saving model checkpoints")
 parser.add_argument("--n_residual_blocks", type=int, default=9, help="number of residual blocks in generator")
 parser.add_argument("--lambda_cyc", type=float, default=10.0, help="cycle loss weight")
 parser.add_argument("--lambda_id", type=float, default=5.0, help="identity loss weight")
@@ -378,6 +378,7 @@ print(opt)
 ## 创建文件夹
 os.makedirs("images/%s" % opt.dataset_name, exist_ok=True)
 os.makedirs("save/%s" % opt.dataset_name, exist_ok=True)
+os.makedirs("saved_models/%s" % opt.dataset_name, exist_ok=True)
 
 ## input_shape:(3, 256, 256)
 input_shape = (opt.channels, opt.img_height, opt.img_width)
@@ -408,12 +409,13 @@ if torch.cuda.is_available():
 
 ## 如果epoch == 0，初始化模型参数; 如果epoch == n, 载入训练到第n轮的预训练模型
 
-if opt.epoch != 0:
+if os.path.exists("saved_models/%s/G_AB_%d.pth" % (opt.dataset_name, opt.epoch)) and os.path.exists("saved_models/%s/G_BA_%d.pth" % (opt.dataset_name, opt.epoch)) and os.path.exists("saved_models/%s/D_A_%d.pth" % (opt.dataset_name, opt.epoch)) and os.path.exists("saved_models/%s/D_B_%d.pth" % (opt.dataset_name, opt.epoch)):
     # 载入训练到第n轮的预训练模型
-    G_AB.load_state_dict(torch.load("save/%s/G_AB_%d.pth" % (opt.dataset_name, opt.epoch)))
-    G_BA.load_state_dict(torch.load("save/%s/G_BA_%d.pth" % (opt.dataset_name, opt.epoch)))
-    D_A.load_state_dict(torch.load("save/%s/D_A_%d.pth" % (opt.dataset_name, opt.epoch)))
-    D_B.load_state_dict(torch.load("save/%s/D_B_%d.pth" % (opt.dataset_name, opt.epoch)))
+    G_AB.load_state_dict(torch.load("saved_models/%s/G_AB_%d.pth" % (opt.dataset_name, opt.epoch)))
+    G_BA.load_state_dict(torch.load("saved_models/%s/G_BA_%d.pth" % (opt.dataset_name, opt.epoch)))
+    D_A.load_state_dict(torch.load("saved_models/%s/D_A_%d.pth" % (opt.dataset_name, opt.epoch)))
+    D_B.load_state_dict(torch.load("saved_models/%s/D_B_%d.pth" % (opt.dataset_name, opt.epoch)))
+    print("load model of %s after epoch %d" % (opt.dataset_name, opt.epoch-1))
 else:
 
     # 初始化模型参数
@@ -451,7 +453,7 @@ transforms_ = [
     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),  ## 正则化
 ]
 
-## Training data loader 
+## Training data loader
 dataloader = DataLoader(  ## 改成自己存放文件的目录
     ImageDataset("vangogh2photo", transforms_=transforms_, unaligned=True),  ## "./datasets/facades" , unaligned:设置非对其数据
     batch_size=opt.batch_size,  ## batch_size = 1
@@ -470,7 +472,7 @@ val_dataloader = DataLoader(
 
 
 ## 每间隔100次打印图片
-def sample_images(batches_done):  ## （100/200/300/400...）
+def sample_images(batches_done, epoch):  ## （100/200/300/400...）
     """保存测试集中生成的样本"""
     imgs = next(iter(val_dataloader))  ## 取一张图像
     G_AB.eval()
@@ -488,7 +490,10 @@ def sample_images(batches_done):  ## （100/200/300/400...）
     # Arange images along y-axis
     ## 把以上图像都拼接起来，保存为一张大图片
     image_grid = torch.cat((real_A, fake_B, real_B, fake_A), 1)
-    save_image(image_grid, "images/%s/%s.png" % (opt.dataset_name, batches_done), normalize=False)
+    folder_path = "images/%s/%s" % (opt.dataset_name, "epoch " + str(epoch))
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path, exist_ok=True)
+    save_image(image_grid, os.path.join(folder_path, "%s.png" % batches_done), normalize=False)
 
 
 def train():
@@ -533,7 +538,7 @@ def train():
 
             loss_GAN = (loss_GAN_AB + loss_GAN_BA) / 2  ## GAN loss
 
-            # Cycle loss 循环一致性损失                                                 
+            # Cycle loss 循环一致性损失
             recov_A = G_BA(fake_B)  ## 之前中realA 通过 A -> B 生成的假图像B，再经过 B -> A ，使得fakeB 得到的循环图像recovA，
             loss_cycle_A = criterion_cycle(recov_A, real_A)  ## realA和recovA的差距应该很小，以保证A,B间不仅风格有所变化，而且图片对应的的细节也可以保留
             recov_B = G_AB(fake_A)
@@ -609,7 +614,7 @@ def train():
 
             # 每训练100张就保存一组测试集中的图片
             if batches_done % opt.sample_interval == 0:
-                sample_images(batches_done)
+                sample_images(batches_done, epoch)
 
         # 更新学习率
         lr_scheduler_G.step()
@@ -619,16 +624,16 @@ def train():
         ## 每间隔几个epoch保存一次模型
         if opt.checkpoint_interval != -1 and epoch % opt.checkpoint_interval == 0:
             # Save model checkpoints
-            torch.save(G_AB.state_dict(), "saved_models/%s/G_AB_%d.pth" % (opt.dataset_name, epoch))
-            torch.save(G_BA.state_dict(), "saved_models/%s/G_BA_%d.pth" % (opt.dataset_name, epoch))
-            torch.save(D_A.state_dict(), "saved_models/%s/D_A_%d.pth" % (opt.dataset_name, epoch))
-            torch.save(D_B.state_dict(), "saved_models/%s/D_B_%d.pth" % (opt.dataset_name, epoch))
+            torch.save(G_AB.state_dict(), "saved_models/%s/G_AB_%d.pth" % (opt.dataset_name, epoch+1))
+            torch.save(G_BA.state_dict(), "saved_models/%s/G_BA_%d.pth" % (opt.dataset_name, epoch+1))
+            torch.save(D_A.state_dict(), "saved_models/%s/D_A_%d.pth" % (opt.dataset_name, epoch+1))
+            torch.save(D_B.state_dict(), "saved_models/%s/D_B_%d.pth" % (opt.dataset_name, epoch+1))
 
     ## 训练结束后，保存模型
-    torch.save(G_AB.state_dict(), "save/%s/G_AB_%d.pth" % (opt.dataset_name, epoch))
-    torch.save(G_BA.state_dict(), "save/%s/G_BA_%d.pth" % (opt.dataset_name, epoch))
-    torch.save(D_A.state_dict(), "save/%s/D_A_%d.pth" % (opt.dataset_name, epoch))
-    torch.save(D_B.state_dict(), "save/%s/D_B_%d.pth" % (opt.dataset_name, epoch))
+    torch.save(G_AB.state_dict(), "save/%s/G_AB_%d.pth" % (opt.dataset_name, opt.n_epochs))
+    torch.save(G_BA.state_dict(), "save/%s/G_BA_%d.pth" % (opt.dataset_name, opt.n_epochs))
+    torch.save(D_A.state_dict(), "save/%s/D_A_%d.pth" % (opt.dataset_name, opt.n_epochs))
+    torch.save(D_B.state_dict(), "save/%s/D_B_%d.pth" % (opt.dataset_name, opt.n_epochs))
     print("save my model finished !!")
 
 
