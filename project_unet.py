@@ -28,6 +28,7 @@ from torch.utils.data import Dataset
 
 import random
 import sys
+import numpy as np
 
 
 ## 定义参数初始化函数
@@ -354,8 +355,8 @@ class LambdaLR:
 
 ## 超参数配置
 parser = argparse.ArgumentParser()
-parser.add_argument("--epoch", type=int, default=25, help="epoch to start training from")  # 开始轮
-parser.add_argument("--n_epochs", type=int, default=29, help="number of epochs of training")  # 总轮数
+parser.add_argument("--epoch", type=int, default=0, help="epoch to start training from")  # 开始轮
+parser.add_argument("--n_epochs", type=int, default=15, help="number of epochs of training")  # 总轮数
 parser.add_argument("--dataset_name", type=str, default="vangogh",
                     help="name of the dataset")  ## ../input/facades-dataset
 parser.add_argument("--batch_size", type=int, default=2, help="size of the batches")
@@ -453,7 +454,7 @@ transforms_ = [
     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),  ## 正则化
 ]
 
-## Training data loader
+## Training data loader 
 dataloader = DataLoader(  ## 改成自己存放文件的目录
     ImageDataset("vangogh2photo", transforms_=transforms_, unaligned=True),  ## "./datasets/facades" , unaligned:设置非对其数据
     batch_size=opt.batch_size,  ## batch_size = 1
@@ -501,8 +502,20 @@ def train():
     #  Training
     # ----------
     prev_time = time.time()  ## 开始时间
+
+    loss_D_history = []
+    loss_G_history = []
+    loss_GAN_history = []
+    loss_cycle_history = []
+    loss_identity_history = []
     for epoch in range(opt.epoch, opt.n_epochs):  ## for epoch in (0, 50)
         print('epoch: ' + str(epoch))
+        loss_identity = 0
+        loss_GAN = 0
+        loss_D = 0
+        loss_cycle = 0
+        loss_G = 0
+
         for i, batch in enumerate(
                 dataloader):  ## batch is a dict, batch['A']:(1, 3, 256, 256), batch['B']:(1, 3, 256, 256)
             ## 读取数据集中的真图片
@@ -538,7 +551,7 @@ def train():
 
             loss_GAN = (loss_GAN_AB + loss_GAN_BA) / 2  ## GAN loss
 
-            # Cycle loss 循环一致性损失
+            # Cycle loss 循环一致性损失                                                 
             recov_A = G_BA(fake_B)  ## 之前中realA 通过 A -> B 生成的假图像B，再经过 B -> A ，使得fakeB 得到的循环图像recovA，
             loss_cycle_A = criterion_cycle(recov_A, real_A)  ## realA和recovA的差距应该很小，以保证A,B间不仅风格有所变化，而且图片对应的的细节也可以保留
             recov_B = G_AB(fake_A)
@@ -595,9 +608,11 @@ def train():
                 seconds=batches_left * (time.time() - prev_time))  ## 还需要的时间 time_left = 剩下的次数 * 每次的时间
             prev_time = time.time()
 
+
+
             # Print log
             sys.stdout.write(
-                "\r[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f, adv: %f, cycle: %f, identity: %f] ETA: %s"
+                "\r[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f, gan: %f, cycle: %f, identity: %f] ETA: %s"
                 % (
                     epoch,
                     opt.n_epochs,
@@ -616,6 +631,13 @@ def train():
             if batches_done % opt.sample_interval == 0:
                 sample_images(batches_done, epoch)
 
+        # keep history
+        loss_D_history.append(loss_D.item())
+        loss_G_history.append(loss_G.item())
+        loss_GAN_history.append(loss_GAN.item())
+        loss_cycle_history.append(loss_cycle.item())
+        loss_identity_history.append(loss_identity.item())
+
         # 更新学习率
         lr_scheduler_G.step()
         lr_scheduler_D_A.step()
@@ -629,11 +651,27 @@ def train():
             torch.save(D_A.state_dict(), "saved_models/%s/D_A_%d.pth" % (opt.dataset_name, epoch+1))
             torch.save(D_B.state_dict(), "saved_models/%s/D_B_%d.pth" % (opt.dataset_name, epoch+1))
 
+            np.save("save/%s/loss_D_history_%d_%d.npy" % (opt.dataset_name, opt.epoch, opt.n_epochs), loss_D_history)
+            np.save("save/%s/loss_G_history_%d_%d.npy" % (opt.dataset_name, opt.epoch, opt.n_epochs), loss_G_history)
+            np.save("save/%s/loss_GAN_history_%d_%d.npy" % (opt.dataset_name, opt.epoch, opt.n_epochs),
+                    loss_GAN_history)
+            np.save("save/%s/loss_cycle_history_%d_%d.npy" % (opt.dataset_name, opt.epoch, opt.n_epochs),
+                    loss_cycle_history)
+            np.save("save/%s/loss_identity_history_%d_%d.npy" % (opt.dataset_name, opt.epoch, opt.n_epochs),
+                    loss_identity_history)
+
     ## 训练结束后，保存模型
     torch.save(G_AB.state_dict(), "save/%s/G_AB_%d.pth" % (opt.dataset_name, opt.n_epochs))
     torch.save(G_BA.state_dict(), "save/%s/G_BA_%d.pth" % (opt.dataset_name, opt.n_epochs))
     torch.save(D_A.state_dict(), "save/%s/D_A_%d.pth" % (opt.dataset_name, opt.n_epochs))
     torch.save(D_B.state_dict(), "save/%s/D_B_%d.pth" % (opt.dataset_name, opt.n_epochs))
+
+    # save losses
+    np.save("save/%s/loss_D_history_%d_%d.npy" % (opt.dataset_name, opt.epoch, opt.n_epochs), loss_D_history)
+    np.save("save/%s/loss_G_history_%d_%d.npy" % (opt.dataset_name, opt.epoch, opt.n_epochs), loss_G_history)
+    np.save("save/%s/loss_GAN_history_%d_%d.npy" % (opt.dataset_name, opt.epoch, opt.n_epochs), loss_GAN_history)
+    np.save("save/%s/loss_cycle_history_%d_%d.npy" % (opt.dataset_name, opt.epoch, opt.n_epochs), loss_cycle_history)
+    np.save("save/%s/loss_identity_history_%d_%d.npy" % (opt.dataset_name, opt.epoch, opt.n_epochs), loss_identity_history)
     print("save my model finished !!")
 
 
